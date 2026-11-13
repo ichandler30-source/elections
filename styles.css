@@ -1,1 +1,71 @@
-/* css styles */
+/* Clean editorial styling for the Election Atlas */
+.atlas-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(195px, 1fr));
+  gap: 0.85rem;
+  margin: 1rem 0 1.25rem 0;
+}
+
+.kpi-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-left: 4px solid #0e3f7a;
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+
+.kpi-card.purple {
+  border-left-color: #7b2cbf;
+}
+
+.kpi-card.house {
+  border-left-color: #1d6fa5;
+}
+
+.kpi-card.turnout {
+  border-left-color: #334155;
+}
+
+.kpi-value {
+  font-size: 1.45rem;
+  font-weight: 700;
+  color: #0f172a;
+  line-height: 1.15;
+}
+
+.kpi-label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #64748b;
+  margin-top: 0.2rem;
+}
+
+.map-legend-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1.4rem;
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 0.6rem 0.95rem;
+  margin-top: 0.65rem;
+  font-size: 0.82rem;
+  color: #334155;
+}
+
+.legend-dot {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 2px;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+
+.leaflet-container {
+  border-radius: 10px;
+  border: 1px solid #cbd5e1;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+}

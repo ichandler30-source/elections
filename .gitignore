@@ -1,3 +1,5 @@
 /.quarto/
 **/*.quarto_ipynb
 _site/
+data/results_pct_20261103.txt
+

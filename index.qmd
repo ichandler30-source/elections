@@ -1,7 +1,704 @@
 ---
-title: "Election"
+title: "North Carolina November 2026 Election Atlas"
+subtitle: "Interactive & publication maps built from the Nov. 3, 2026 NC State Board of Elections precinct results"
+page-layout: full
+toc: false
+execute:
+  echo: false
+  warning: false
+  message: false
 ---
 
-This is a Quarto website.
+```{r}
+#| label: setup-data
 
-To learn more about Quarto websites visit <https://quarto.org/docs/websites>.
+library(readr)
+library(dplyr)
+library(stringr)
+library(tidyr)
+library(sf)
+library(tigris)
+library(ggplot2)
+library(patchwork)
+library(leaflet)
+library(htmltools)
+
+options(tigris_use_cache = TRUE)
+
+# Ensure Nov. 3, 2026 NCSBE results are downloaded and extracted
+dir.create("data", showWarnings = FALSE)
+zip_path <- "data/results_pct_20261103.zip"
+txt_path <- "data/results_pct_20261103.txt"
+ncsbe_url <- "https://s3.amazonaws.com/dl.ncsbe.gov/ENRS/2026_11_03/results_pct_20261103.zip"
+
+if (!file.exists(txt_path)) {
+  if (!file.exists(zip_path)) {
+    download.file(ncsbe_url, destfile = zip_path, mode = "wb", quiet = TRUE)
+  }
+  unzip(zip_path, exdir = "data")
+}
+
+results_2026 <- read_tsv(txt_path, show_col_types = FALSE)
+
+# 1. County-level U.S. Senate + Supreme Court + Voter ID Amendment + Early Voting
+senate_county <- results_2026 |>
+  filter(`Contest Name` == "US SENATE") |>
+  group_by(County) |>
+  summarise(
+    cooper = sum(`Total Votes`[`Choice Party` == "DEM"], na.rm = TRUE),
+    whatley = sum(`Total Votes`[`Choice Party` == "REP"], na.rm = TRUE),
+    sen_early = sum(`Early Voting` + `Absentee by Mail`, na.rm = TRUE),
+    sen_eday = sum(`Election Day`, na.rm = TRUE),
+    total = sum(`Total Votes`, na.rm = TRUE),
+    margin = 100 * (cooper - whatley) / total,
+    early_share = 100 * sen_early / total,
+    .groups = "drop"
+  )
+
+sc_county <- results_2026 |>
+  filter(`Contest Name` == "NC SUPREME COURT ASSOCIATE JUSTICE SEAT 01") |>
+  group_by(County) |>
+  summarise(
+    earls = sum(`Total Votes`[`Choice Party` == "DEM"], na.rm = TRUE),
+    stevens = sum(`Total Votes`[`Choice Party` == "REP"], na.rm = TRUE),
+    sc_tot = sum(`Total Votes`, na.rm = TRUE),
+    sc_margin = 100 * (earls - stevens) / sc_tot,
+    .groups = "drop"
+  )
+
+voterid_county <- results_2026 |>
+  filter(`Contest Name` == "CONSTITUTIONAL AMENDMENT - REQUIRE PHOTO ID FOR VOTING") |>
+  group_by(County) |>
+  summarise(
+    id_for = sum(`Total Votes`[Choice == "For"], na.rm = TRUE),
+    id_against = sum(`Total Votes`[Choice == "Against"], na.rm = TRUE),
+    id_tot = sum(`Total Votes`, na.rm = TRUE),
+    id_for_pct = 100 * id_for / id_tot,
+    id_margin = 100 * (id_for - id_against) / id_tot,
+    .groups = "drop"
+  )
+
+bin_levels <- c(
+  "Cooper +20+",
+  "Cooper +10 to +20",
+  "Cooper +5 to +10",
+  "Cooper 0 to +5",
+  "Whatley 0 to +5",
+  "Whatley +5 to +10",
+  "Whatley +10 to +20",
+  "Whatley +20+"
+)
+
+ncfree_pal <- c(
+  "Cooper +20+"        = "#0e3f7a",
+  "Cooper +10 to +20"  = "#2463a8",
+  "Cooper +5 to +10"   = "#6d9fd2",
+  "Cooper 0 to +5"     = "#bed1ef",
+  "Whatley 0 to +5"    = "#f4c5bf",
+  "Whatley +5 to +10"  = "#e28775",
+  "Whatley +10 to +20" = "#c4432e",
+  "Whatley +20+"       = "#8c2417"
+)
+
+split_levels <- c(
+  "Cooper (D) + Against Voter ID",
+  "Split-Ticket: Cooper (D) + For Voter ID",
+  "Whatley (R) + For Voter ID"
+)
+
+split_pal <- c(
+  "Cooper (D) + Against Voter ID"           = "#14539a",
+  "Split-Ticket: Cooper (D) + For Voter ID" = "#7b2cbf",
+  "Whatley (R) + For Voter ID"              = "#b83321"
+)
+
+county_all <- senate_county |>
+  left_join(sc_county, by = "County") |>
+  left_join(voterid_county, by = "County") |>
+  mutate(
+    margin_bin = factor(case_when(
+      margin >=  20 ~ "Cooper +20+",
+      margin >=  10 ~ "Cooper +10 to +20",
+      margin >=   5 ~ "Cooper +5 to +10",
+      margin >=   0 ~ "Cooper 0 to +5",
+      margin >=  -5 ~ "Whatley 0 to +5",
+      margin >= -10 ~ "Whatley +5 to +10",
+      margin >= -20 ~ "Whatley +10 to +20",
+      TRUE          ~ "Whatley +20+"
+    ), levels = bin_levels),
+    split_cat = factor(case_when(
+      margin > 0 & id_margin <= 0 ~ "Cooper (D) + Against Voter ID",
+      margin > 0 & id_margin >  0 ~ "Split-Ticket: Cooper (D) + For Voter ID",
+      TRUE                        ~ "Whatley (R) + For Voter ID"
+    ), levels = split_levels),
+    sen_hex = unname(ncfree_pal[as.character(margin_bin)]),
+    split_hex = unname(split_pal[as.character(split_cat)])
+  )
+
+# 2. All 120 NC House Districts (Nov. 2026)
+house_levels <- c(
+  "DEM +20+",
+  "DEM +10 to +20",
+  "DEM +5 to +10",
+  "DEM 0 to +5",
+  "Unaffiliated Win",
+  "REP 0 to +5",
+  "REP +5 to +10",
+  "REP +10 to +20",
+  "REP +20+"
+)
+
+house_pal <- c(
+  "DEM +20+"         = "#0e3f7a",
+  "DEM +10 to +20"   = "#2463a8",
+  "DEM +5 to +10"    = "#6d9fd2",
+  "DEM 0 to +5"      = "#bed1ef",
+  "Unaffiliated Win" = "#d97706",
+  "REP 0 to +5"      = "#f4c5bf",
+  "REP +5 to +10"    = "#e28775",
+  "REP +10 to +20"   = "#c4432e",
+  "REP +20+"         = "#8c2417"
+)
+
+house_results <- results_2026 |>
+  filter(str_starts(`Contest Name`, "NC HOUSE OF REPRESENTATIVES DISTRICT ")) |>
+  mutate(SLDLST = str_extract(`Contest Name`, "[0-9]{3}$")) |>
+  group_by(SLDLST, Choice, `Choice Party`) |>
+  summarise(votes = sum(`Total Votes`, na.rm = TRUE), .groups = "drop") |>
+  group_by(SLDLST) |>
+  arrange(desc(votes), .by_group = TRUE) |>
+  summarise(
+    total_votes = sum(votes),
+    winner = first(Choice),
+    winner_party = first(`Choice Party`),
+    winner_votes = first(votes),
+    runner_up = nth(Choice, 2, default = "Unopposed"),
+    runner_up_party = nth(`Choice Party`, 2, default = "—"),
+    runner_up_votes = nth(votes, 2, default = 0),
+    n_cands = n(),
+    dem_votes = sum(votes[`Choice Party` == "DEM"]),
+    rep_votes = sum(votes[`Choice Party` == "REP"]),
+    win_margin = 100 * (winner_votes - runner_up_votes) / total_votes,
+    signed_margin = 100 * (dem_votes - rep_votes) / total_votes,
+    .groups = "drop"
+  ) |>
+  mutate(
+    house_bin = factor(case_when(
+      winner_party == "UNA" ~ "Unaffiliated Win",
+      winner_party == "DEM" & win_margin >= 20 ~ "DEM +20+",
+      winner_party == "DEM" & win_margin >= 10 ~ "DEM +10 to +20",
+      winner_party == "DEM" & win_margin >=  5 ~ "DEM +5 to +10",
+      winner_party == "DEM"                    ~ "DEM 0 to +5",
+      winner_party == "REP" & win_margin <   5 ~ "REP 0 to +5",
+      winner_party == "REP" & win_margin <  10 ~ "REP +5 to +10",
+      winner_party == "REP" & win_margin <  20 ~ "REP +10 to +20",
+      TRUE                                     ~ "REP +20+"
+    ), levels = house_levels),
+    house_hex = unname(house_pal[as.character(house_bin)])
+  )
+
+# Spatial boundaries
+nc_co_500k <- counties("NC", cb = TRUE, resolution = "500k", year = 2024, progress_bar = FALSE) |>
+  mutate(County = toupper(NAME)) |>
+  left_join(county_all, by = "County")
+
+nc_co_wgs84 <- counties("NC", cb = TRUE, resolution = "5m", year = 2024, progress_bar = FALSE) |>
+  mutate(County = toupper(NAME)) |>
+  left_join(county_all, by = "County") |>
+  st_transform(4326)
+
+nc_house_sf <- state_legislative_districts("NC", house = "lower", cb = TRUE, year = 2024, progress_bar = FALSE) |>
+  left_join(house_results, by = "SLDLST") |>
+  st_transform(4326)
+
+statewide_sen_margin <- 100 * (sum(county_all$cooper) - sum(county_all$whatley)) / sum(county_all$total)
+```
+
+<div class="atlas-kpis">
+  <div class="kpi-card">
+    <div class="kpi-value">Cooper +19.7%</div>
+    <div class="kpi-label">U.S. Senate · 44 of 100 Counties</div>
+  </div>
+  <div class="kpi-card purple">
+    <div class="kpi-value">38 Counties</div>
+    <div class="kpi-label">Split Ticket: Cooper (D) + Voter ID Yes</div>
+  </div>
+  <div class="kpi-card house">
+    <div class="kpi-value">71 D · 48 R · 1 U</div>
+    <div class="kpi-label">NC House Seats (120 Districts)</div>
+  </div>
+  <div class="kpi-card turnout">
+    <div class="kpi-value">4,222,803</div>
+    <div class="kpi-label">Total Ballots Cast (Nov. 3, 2026)</div>
+  </div>
+</div>
+
+### Interactive November 2026 Map Explorer
+
+Use the **layer control in the top-right corner** of the map to switch between:
+
+1. **U.S. Senate Margin (100 Counties)** — Roy Cooper (D) vs. Michael Whatley (R)
+2. **Ticket-Splitting Crossover (100 Counties)** — the **38 purple counties** that voted *both* for Democrat Roy Cooper and *For* the Photo Voter ID Constitutional Amendment
+3. **NC House Results (All 120 Districts)** — zoom into Charlotte, Wake, Triad, or District 51 (won by Unaffiliated candidate April Montgomery)
+4. **County Vote Volume Bubbles** *(toggleable overlay)* — circles sized by total ballots cast
+
+```{r}
+#| label: interactive-leaflet-map
+
+county_Popup <- sprintf(
+  paste0(
+    "<div style='font-family:system-ui,-apple-system,sans-serif;min-width:235px;line-height:1.38;'>",
+    "<div style='font-size:15px;font-weight:700;color:#0f172a;border-bottom:1px solid #e2e8f0;padding-bottom:4px;margin-bottom:6px;'>%s County</div>",
+    "<div style='font-size:12px;font-weight:700;color:%s;margin-bottom:5px;'>U.S. Senate: %s</div>",
+    "<div style='font-size:12px;color:#334155;'>",
+    "• <b>Roy Cooper (D):</b> %s (%.1f%%)<br/>",
+    "• <b>Michael Whatley (R):</b> %s (%.1f%%)<br/>",
+    "• <b>Total Votes:</b> %s (%.0f%% Early/Mail)",
+    "</div>",
+    "<div style='margin-top:6px;padding-top:5px;border-top:1px dashed #cbd5e1;font-size:11.5px;color:#475569;'>",
+    "<b>Supreme Court:</b> %s<br/>",
+    "<b>Photo Voter ID Amend.:</b> %.1f%% For (%s)",
+    "</div></div>"
+  ),
+  nc_co_wgs84$NAME,
+  ifelse(nc_co_wgs84$margin >= 0, "#19569b", "#b83321"),
+  ifelse(
+    nc_co_wgs84$margin >= 0,
+    sprintf("Cooper +%.1f pts", nc_co_wgs84$margin),
+    sprintf("Whatley +%.1f pts", abs(nc_co_wgs84$margin))
+  ),
+  format(nc_co_wgs84$cooper, big.mark = ","),
+  100 * nc_co_wgs84$cooper / nc_co_wgs84$total,
+  format(nc_co_wgs84$whatley, big.mark = ","),
+  100 * nc_co_wgs84$whatley / nc_co_wgs84$total,
+  format(nc_co_wgs84$total, big.mark = ","),
+  nc_co_wgs84$early_share,
+  ifelse(
+    nc_co_wgs84$sc_margin >= 0,
+    sprintf("Earls (D) +%.1f pts", nc_co_wgs84$sc_margin),
+    sprintf("Stevens (R) +%.1f pts", abs(nc_co_wgs84$sc_margin))
+  ),
+  nc_co_wgs84$id_for_pct,
+  ifelse(nc_co_wgs84$id_margin > 0, "Passed", "Rejected")
+) |> lapply(HTML)
+
+house_Popup <- sprintf(
+  paste0(
+    "<div style='font-family:system-ui,-apple-system,sans-serif;min-width:225px;line-height:1.38;'>",
+    "<div style='font-size:14.5px;font-weight:700;color:#0f172a;border-bottom:1px solid #e2e8f0;padding-bottom:4px;margin-bottom:6px;'>NC House District %d</div>",
+    "<div style='font-size:12px;font-weight:700;color:%s;margin-bottom:4px;'>Winner: %s (%s)</div>",
+    "<div style='font-size:12px;color:#334155;'>",
+    "• <b>%s (%s):</b> %s (%.1f%%)<br/>",
+    "%s",
+    "• <b>Victory Margin:</b> %s",
+    "</div></div>"
+  ),
+  as.integer(nc_house_sf$SLDLST),
+  ifelse(nc_house_sf$winner_party == "DEM", "#19569b",
+         ifelse(nc_house_sf$winner_party == "UNA", "#b45309", "#b83321")),
+  nc_house_sf$winner,
+  nc_house_sf$winner_party,
+  nc_house_sf$winner,
+  nc_house_sf$winner_party,
+  format(nc_house_sf$winner_votes, big.mark = ","),
+  100 * nc_house_sf$winner_votes / nc_house_sf$total_votes,
+  ifelse(
+    nc_house_sf$n_cands > 1,
+    sprintf(
+      "• <b>%s (%s):</b> %s (%.1f%%)<br/>",
+      nc_house_sf$runner_up,
+      nc_house_sf$runner_up_party,
+      format(nc_house_sf$runner_up_votes, big.mark = ","),
+      100 * nc_house_sf$runner_up_votes / nc_house_sf$total_votes
+    ),
+    "• <i>Unopposed on general election ballot</i><br/>"
+  ),
+  ifelse(nc_house_sf$n_cands > 1, sprintf("+%.1f pts", nc_house_sf$win_margin), "Uncontested")
+) |> lapply(HTML)
+
+# Centroids for proportional vote-volume bubbles
+co_centroids <- nc_co_500k |>
+  st_transform(32119) |>
+  st_point_on_surface() |>
+  st_transform(4326)
+coords <- st_coordinates(co_centroids)
+co_centroids$lon <- coords[, 1]
+co_centroids$lat <- coords[, 2]
+
+leaflet(options = leafletOptions(minZoom = 6, preferCanvas = TRUE), width = "100%", height = 540) |>
+  addProviderTiles(providers$CartoDB.Positron, options = providerTileOptions(opacity = 0.92)) |>
+  setView(lng = -79.45, lat = 35.48, zoom = 7) |>
+  # Layer 1: U.S. Senate Margin
+  addPolygons(
+    data = nc_co_wgs84,
+    group = "U.S. Senate Margin (Counties)",
+    fillColor = ~sen_hex,
+    fillOpacity = 0.84,
+    color = "#ffffff",
+    weight = 1.1,
+    label = county_Popup,
+    highlightOptions = highlightOptions(weight = 2.6, color = "#0f172a", fillOpacity = 0.94, bringToFront = TRUE)
+  ) |>
+  # Layer 2: Split-Ticket Crossover
+  addPolygons(
+    data = nc_co_wgs84,
+    group = "Split-Ticket: Cooper vs. Voter ID",
+    fillColor = ~split_hex,
+    fillOpacity = 0.84,
+    color = "#ffffff",
+    weight = 1.1,
+    label = county_Popup,
+    highlightOptions = highlightOptions(weight = 2.6, color = "#0f172a", fillOpacity = 0.94, bringToFront = TRUE)
+  ) |>
+  # Layer 3: All 120 NC House Districts
+  addPolygons(
+    data = nc_house_sf,
+    group = "NC House Races (120 Districts)",
+    fillColor = ~house_hex,
+    fillOpacity = 0.84,
+    color = "#ffffff",
+    weight = 0.9,
+    label = house_Popup,
+    highlightOptions = highlightOptions(weight = 2.5, color = "#0f172a", fillOpacity = 0.95, bringToFront = TRUE)
+  ) |>
+  # Optional Overlay: Proportional Vote Volume Bubbles
+  addCircleMarkers(
+    data = co_centroids,
+    lng = ~lon,
+    lat = ~lat,
+    group = "County Vote Volume Bubbles",
+    radius = ~pmax(3.5, 28 * sqrt(total / max(total))),
+    fillColor = ~ifelse(margin >= 0, "#0e3f7a", "#991b1b"),
+    fillOpacity = 0.55,
+    color = "#0f172a",
+    weight = 1.1,
+    label = county_Popup
+  ) |>
+  hideGroup("County Vote Volume Bubbles") |>
+  addLayersControl(
+    baseGroups = c(
+      "U.S. Senate Margin (Counties)",
+      "Split-Ticket: Cooper vs. Voter ID",
+      "NC House Races (120 Districts)"
+    ),
+    overlayGroups = c("County Vote Volume Bubbles"),
+    options = layersControlOptions(collapsed = FALSE)
+  )
+```
+
+<div class="map-legend-strip">
+  <span><strong>Color Key:</strong></span>
+  <span><span class="legend-dot" style="background:#0e3f7a;"></span>Dem / Cooper +20+</span>
+  <span><span class="legend-dot" style="background:#6d9fd2;"></span>Dem / Cooper +5–20</span>
+  <span><span class="legend-dot" style="background:#bed1ef;"></span>Dem / Cooper 0–5</span>
+  <span><span class="legend-dot" style="background:#f4c5bf;"></span>Rep / Whatley 0–5</span>
+  <span><span class="legend-dot" style="background:#e28775;"></span>Rep / Whatley +5–20</span>
+  <span><span class="legend-dot" style="background:#8c2417;"></span>Rep / Whatley +20+</span>
+  <span><span class="legend-dot" style="background:#7b2cbf;"></span>Split-Ticket (Cooper + Voter ID Yes)</span>
+  <span><span class="legend-dot" style="background:#d97706;"></span>Unaffiliated Win (HD-51)</span>
+</div>
+
+---
+
+### Publication Maps (NCFREE Editorial Style)
+
+::: {.panel-tabset}
+
+## Ticket-Splitting Map (Senate vs. Voter ID)
+
+```{r}
+#| label: split-ticket-map
+#| fig-width: 11
+#| fig-height: 8.2
+#| fig-dpi: 300
+#| out-width: "100%"
+
+font_serif <- "TeX Gyre Pagella"
+font_sans  <- "TeX Gyre Heros"
+
+nc_co_sp <- st_transform(nc_co_500k, 32119)
+nc_outline <- st_union(nc_co_sp)
+
+# Highlight labels for notable split-ticket & urban counties
+notable <- nc_co_sp |>
+  filter(County %in% c("WAKE", "MECKLENBURG", "GUILFORD", "FORSYTH", "CUMBERLAND", "NEW HANOVER", "PITT", "CABARRUS", "BUNCOMBE", "WATAUGA")) |>
+  mutate(pt = st_point_on_surface(geometry))
+notable_coords <- st_coordinates(notable$pt)
+notable_df <- tibble(
+  name = tools::toTitleCase(tolower(notable$County)),
+  x = notable_coords[, 1],
+  y = notable_coords[, 2],
+  cat = notable$split_cat
+)
+
+split_bar_df <- tibble(
+  xmin = c(0.02, 2.70, 5.38),
+  xmax = c(2.60, 5.28, 7.98),
+  cat  = factor(split_levels, levels = split_levels),
+  title_lbl = c(
+    "6 COUNTIES · Cooper (D) + Voter ID NO",
+    "38 COUNTIES · Split Ticket: Cooper (D) + Voter ID YES",
+    "56 COUNTIES · Whatley (R) + Voter ID YES"
+  ),
+  sub_lbl = c(
+    "Wake, Mecklenburg, Durham, Orange, Buncombe, Chatham",
+    "Suburban, Triad, Eastern Black Belt & mountain crossover counties",
+    "Zero counties voted Whatley (R) and Against Voter ID"
+  )
+)
+
+p_split_hdr <- ggplot() +
+  geom_rect(
+    data = split_bar_df,
+    aes(xmin = xmin, xmax = xmax, ymin = 1.05, ymax = 1.38, fill = cat),
+    show.legend = FALSE
+  ) +
+  scale_fill_manual(values = split_pal) +
+  geom_text(
+    data = split_bar_df,
+    aes(x = (xmin + xmax) / 2, y = 1.56, label = title_lbl),
+    family = font_sans, fontface = "bold", size = 3.25, color = "#1e293b"
+  ) +
+  geom_text(
+    data = split_bar_df,
+    aes(x = (xmin + xmax) / 2, y = 0.76, label = sub_lbl),
+    family = font_sans, size = 2.75, color = "#64748b"
+  ) +
+  scale_x_continuous(limits = c(0, 8), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0.45, 1.95), expand = c(0, 0)) +
+  theme_void()
+
+p_split_map <- ggplot(nc_co_sp) +
+  geom_sf(aes(fill = split_cat), color = "#ffffff", linewidth = 0.30, show.legend = FALSE) +
+  geom_sf(data = nc_outline, fill = NA, color = "#64748b", linewidth = 0.35) +
+  geom_label(
+    data = notable_df,
+    aes(x = x, y = y, label = name),
+    family = font_sans, fontface = "bold", size = 2.55,
+    color = "#0f172a", fill = alpha("#ffffff", 0.82),
+    label.size = 0.15, label.padding = unit(0.14, "lines")
+  ) +
+  scale_fill_manual(values = split_pal, drop = FALSE) +
+  coord_sf(datum = NA, expand = FALSE) +
+  theme_void() +
+  theme(plot.margin = margin(4, 8, 8, 8))
+
+p_split_ftr <- ggplot() +
+  geom_segment(aes(x = 0, xend = 1, y = 0.88, yend = 0.88), color = "#dce2e6", linewidth = 0.4) +
+  annotate(
+    "text", x = 0, y = 0.42,
+    label = paste0(
+      "Source: NC State Board of Elections (Nov. 3, 2026 precinct results). Statewide: Roy Cooper (D) won 58.8%–39.0%,\n",
+      "while the Constitutional Amendment Requiring Photo ID for Voting simultaneously passed 59.6%–40.4%."
+    ),
+    hjust = 0, vjust = 0.5, family = font_sans, size = 3.05, color = "#66737d", lineheight = 1.25
+  ) +
+  annotate(
+    "text", x = 1, y = 0.52,
+    label = "NCSBE · Nov. 2026",
+    hjust = 1, vjust = 0.5, family = font_sans, fontface = "bold", size = 3.2, color = "#5b6770"
+  ) +
+  scale_x_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  theme_void()
+
+(p_split_hdr / p_split_map / p_split_ftr) +
+  plot_layout(heights = c(1.35, 5.55, 0.75)) +
+  plot_annotation(
+    title = "North Carolina’s 2026 split-ticket wave, in one map",
+    subtitle = "38 of 100 counties backed Democrat Roy Cooper for U.S. Senate while also voting FOR the Photo Voter ID constitutional amendment.",
+    theme = theme(
+      plot.background = element_rect(fill = "#ffffff", color = NA),
+      plot.margin = margin(20, 26, 14, 26),
+      plot.title = element_text(
+        family = font_serif, face = "bold", size = 23, color = "#103243",
+        margin = margin(b = 6)
+      ),
+      plot.subtitle = element_text(
+        family = font_sans, size = 11.3, color = "#5c6a73",
+        margin = margin(b = 8)
+      )
+    )
+  )
+```
+
+## All 120 NC House Districts
+
+```{r}
+#| label: nc-house-map
+#| fig-width: 11
+#| fig-height: 8.2
+#| fig-dpi: 300
+#| out-width: "100%"
+
+nc_house_sp <- st_transform(nc_house_sf, 32119)
+nc_house_outline <- st_union(nc_house_sp)
+
+house_bar_levels <- c(
+  "DEM +20+", "DEM +10 to +20", "DEM +5 to +10", "DEM 0 to +5",
+  "Unaffiliated Win",
+  "REP 0 to +5", "REP +5 to +10", "REP +10 to +20", "REP +20+"
+)
+
+hbar_df <- tibble(
+  idx = 1:9,
+  xmin = c(0.02, 0.95, 1.88, 2.81, 3.74, 4.30, 5.23, 6.16, 7.09),
+  xmax = c(0.91, 1.84, 2.77, 3.70, 4.26, 5.19, 6.12, 7.05, 7.98),
+  bin = factor(house_bar_levels, levels = house_levels)
+)
+
+htick_df <- tibble(
+  x = c(0.02, 1.86, 4.00, 6.14, 7.98),
+  label = c("Dem +20 or more", "Dem +10", "Unaffil. (HD-51)", "Rep +10", "Rep +20 or more"),
+  hjust = c(0, 0.5, 0.5, 0.5, 1),
+  face = c("plain", "plain", "bold", "plain", "plain"),
+  col = c("#5b6770", "#5b6770", "#b45309", "#5b6770", "#5b6770")
+)
+
+p_h_hdr <- ggplot() +
+  annotate("text", x = 0.02, y = 1.55, label = "71",
+           hjust = 0, vjust = 0, family = font_serif, fontface = "bold", size = 11.5, color = "#19569b") +
+  annotate("text", x = 0.58, y = 1.60, label = "DEMOCRATIC SEATS  (+ 1 UNAFFILIATED IN HD-51)",
+           hjust = 0, vjust = 0, family = font_sans, fontface = "bold", size = 3.35, color = "#5b6770") +
+  annotate("text", x = 7.98, y = 1.55, label = "48",
+           hjust = 1, vjust = 0, family = font_serif, fontface = "bold", size = 11.5, color = "#b83321") +
+  annotate("text", x = 7.42, y = 1.60, label = "REPUBLICAN SEATS",
+           hjust = 1, vjust = 0, family = font_sans, fontface = "bold", size = 3.35, color = "#5b6770") +
+  geom_rect(data = hbar_df, aes(xmin = xmin, xmax = xmax, ymin = 0.88, ymax = 1.16, fill = bin), show.legend = FALSE) +
+  scale_fill_manual(values = house_pal, drop = FALSE) +
+  geom_text(data = htick_df, aes(x = x, y = 0.63, label = label, hjust = hjust, fontface = face),
+            family = font_sans, size = 3.2, color = htick_df$col) +
+  scale_x_continuous(limits = c(0, 8), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0.35, 2.55), expand = c(0, 0)) +
+  theme_void()
+
+p_h_map <- ggplot(nc_house_sp) +
+  geom_sf(aes(fill = house_bin), color = "#ffffff", linewidth = 0.22, show.legend = FALSE) +
+  geom_sf(data = nc_house_outline, fill = NA, color = "#7c8b95", linewidth = 0.35) +
+  scale_fill_manual(values = house_pal, drop = FALSE) +
+  coord_sf(datum = NA, expand = FALSE) +
+  theme_void() +
+  theme(plot.margin = margin(4, 8, 8, 8))
+
+p_h_ftr <- ggplot() +
+  geom_segment(aes(x = 0, xend = 1, y = 0.88, yend = 0.88), color = "#dce2e6", linewidth = 0.4) +
+  annotate(
+    "text", x = 0, y = 0.42,
+    label = paste0(
+      "Source: NC State Board of Elections (Nov. 3, 2026 precinct results across all 120 NC House contests).\n",
+      "Shaded by winner’s percentage-point victory margin; District 51 (Moore/Lee) won by Unaffiliated candidate April Montgomery."
+    ),
+    hjust = 0, vjust = 0.5, family = font_sans, size = 3.05, color = "#66737d", lineheight = 1.25
+  ) +
+  annotate(
+    "text", x = 1, y = 0.52,
+    label = "NCSBE · Nov. 2026",
+    hjust = 1, vjust = 0.5, family = font_sans, fontface = "bold", size = 3.2, color = "#5b6770"
+  ) +
+  scale_x_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  theme_void()
+
+(p_h_hdr / p_h_map / p_h_ftr) +
+  plot_layout(heights = c(1.55, 5.4, 0.75)) +
+  plot_annotation(
+    title = "How every NC House district voted in November 2026",
+    subtitle = "Winner and victory margin across all 120 North Carolina House of Representatives districts, Nov. 3, 2026 general election.",
+    theme = theme(
+      plot.background = element_rect(fill = "#ffffff", color = NA),
+      plot.margin = margin(20, 26, 14, 26),
+      plot.title = element_text(family = font_serif, face = "bold", size = 23, color = "#103243", margin = margin(b = 6)),
+      plot.subtitle = element_text(family = font_sans, size = 11.3, color = "#5c6a73", margin = margin(b = 10))
+    )
+  )
+```
+
+## U.S. Senate by County
+
+```{r}
+#| label: nc-senate-map
+#| fig-width: 11
+#| fig-height: 8.2
+#| fig-dpi: 300
+#| out-width: "100%"
+
+cooper_counties <- sum(county_all$cooper > county_all$whatley)
+whatley_counties <- sum(county_all$whatley > county_all$cooper)
+
+bar_df <- tibble(
+  idx = 1:8,
+  xmin = seq(0, 7) + 0.015,
+  xmax = seq(1, 8) - 0.015,
+  bin = factor(bin_levels, levels = bin_levels)
+)
+
+tick_df <- tibble(
+  x = c(0.015, 2, 3, 4, 5, 6, 7.985),
+  label = c("Cooper +20 or more", "+10", "+5", "Even", "+5", "+10", "Whatley +20 or more"),
+  hjust = c(0, 0.5, 0.5, 0.5, 0.5, 0.5, 1),
+  face = c("plain", "plain", "plain", "bold", "plain", "plain", "plain"),
+  col = c("#5b6770", "#5b6770", "#5b6770", "#1f2d36", "#5b6770", "#5b6770", "#5b6770")
+)
+
+p_header <- ggplot() +
+  annotate("text", x = 0.015, y = 1.55, label = as.character(cooper_counties),
+           hjust = 0, vjust = 0, family = font_serif, fontface = "bold", size = 11.5, color = "#19569b") +
+  annotate("text", x = 0.58, y = 1.60, label = "COUNTIES COOPER CARRIES",
+           hjust = 0, vjust = 0, family = font_sans, fontface = "bold", size = 3.5, color = "#5b6770") +
+  annotate("text", x = 7.985, y = 1.55, label = as.character(whatley_counties),
+           hjust = 1, vjust = 0, family = font_serif, fontface = "bold", size = 11.5, color = "#b83321") +
+  annotate("text", x = 7.42, y = 1.60, label = "COUNTIES WHATLEY CARRIES",
+           hjust = 1, vjust = 0, family = font_sans, fontface = "bold", size = 3.5, color = "#5b6770") +
+  geom_rect(data = bar_df, aes(xmin = xmin, xmax = xmax, ymin = 0.88, ymax = 1.16, fill = bin), show.legend = FALSE) +
+  scale_fill_manual(values = ncfree_pal, drop = FALSE) +
+  geom_text(data = tick_df, aes(x = x, y = 0.64, label = label, hjust = hjust, fontface = face),
+            family = font_sans, size = 3.3, color = tick_df$col) +
+  scale_x_continuous(limits = c(0, 8), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0.35, 2.55), expand = c(0, 0)) +
+  theme_void()
+
+p_map <- ggplot(nc_co_sp) +
+  geom_sf(aes(fill = margin_bin), color = "#ffffff", linewidth = 0.28, show.legend = FALSE) +
+  geom_sf(data = nc_outline, fill = NA, color = "#7c8b95", linewidth = 0.35) +
+  scale_fill_manual(values = ncfree_pal, drop = FALSE) +
+  coord_sf(datum = NA, expand = FALSE) +
+  theme_void() +
+  theme(plot.margin = margin(4, 8, 8, 8))
+
+p_footer <- ggplot() +
+  geom_segment(aes(x = 0, xend = 1, y = 0.88, yend = 0.88), color = "#dce2e6", linewidth = 0.4) +
+  annotate(
+    "text", x = 0, y = 0.42,
+    label = paste0(
+      "Source: NC State Board of Elections (Nov. 3, 2026 precinct results file).\n",
+      "Margin = Roy Cooper (D) vote share minus Michael Whatley (R) vote share out of all 4,222,803 U.S. Senate votes cast."
+    ),
+    hjust = 0, vjust = 0.5, family = font_sans, size = 3.05, color = "#66737d", lineheight = 1.25
+  ) +
+  annotate(
+    "text", x = 1, y = 0.52,
+    label = "NCSBE · Nov. 2026",
+    hjust = 1, vjust = 0.5, family = font_sans, fontface = "bold", size = 3.2, color = "#5b6770"
+  ) +
+  scale_x_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  theme_void()
+
+(p_header / p_map / p_footer) +
+  plot_layout(heights = c(1.55, 5.4, 0.75)) +
+  plot_annotation(
+    title = "How Cooper did in every North Carolina county",
+    subtitle = sprintf(
+      "U.S. Senate margin, Roy Cooper (D) vs. Michael Whatley (R), Nov. 3, 2026 general election. Statewide: Cooper +%.1f pts.",
+      statewide_sen_margin
+    ),
+    theme = theme(
+      plot.background = element_rect(fill = "#ffffff", color = NA),
+      plot.margin = margin(20, 26, 14, 26),
+      plot.title = element_text(family = font_serif, face = "bold", size = 23, color = "#103243", margin = margin(b = 6)),
+      plot.subtitle = element_text(family = font_sans, size = 11.5, color = "#5c6a73", margin = margin(b = 10))
+    )
+  )
+```
+
+:::

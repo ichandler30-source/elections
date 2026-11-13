@@ -2,4 +2,10 @@
 title: "About"
 ---
 
-About this site
+This site visualizes precinct- and county-level results from the **November 3, 2026 North Carolina General Election**, published by the [North Carolina State Board of Elections (NCSBE)](https://www.ncsbe.gov/results-data/election-results/historical-election-results-data).
+
+### Data & Methodology
+
+- **Election Results:** Official/unofficial precinct export (`results_pct_20261103.zip`) from the NCSBE Election Night Reporting System (`dl.ncsbe.gov/ENRS/2026_11_03/`).
+- **Boundaries:** 2024 cartographic county and North Carolina House of Representatives legislative district boundaries from the U.S. Census Bureau via the `tigris` and `sf` R packages, projected to NC State Plane (`EPSG:32119`) for static cartography and `WGS84` (`EPSG:4326`) for interactive Leaflet maps.
+- **Design Inspiration:** Static map typography and diverging color scales inspired by [NCFREE's 2026 election-night graphics](https://ncfree.org/2026/11/election-night-2026-the-extended-cut/).
