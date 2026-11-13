@@ -2,15 +2,15 @@
   {
     "objectID": "index.html",
     "href": "index.html",
-    "title": "Election",
+    "title": "North Carolina November 2026 Election Atlas",
     "section": "",
-    "text": "This is a Quarto website.\nTo learn more about Quarto websites visit https://quarto.org/docs/websites."
+    "text": "&lt;div class=\"kpi-value\"&gt;Cooper +19.7%&lt;/div&gt;\n&lt;div class=\"kpi-label\"&gt;U.S. Senate · 44 of 100 Counties&lt;/div&gt;\n\n\n&lt;div class=\"kpi-value\"&gt;38 Counties&lt;/div&gt;\n&lt;div class=\"kpi-label\"&gt;Split Ticket: Cooper (D) + Voter ID Yes&lt;/div&gt;\n\n\n&lt;div class=\"kpi-value\"&gt;71 D · 48 R · 1 U&lt;/div&gt;\n&lt;div class=\"kpi-label\"&gt;NC House Seats (120 Districts)&lt;/div&gt;\n\n\n&lt;div class=\"kpi-value\"&gt;4,222,803&lt;/div&gt;\n&lt;div class=\"kpi-label\"&gt;Total Ballots Cast (Nov. 3, 2026)&lt;/div&gt;\n\n\n\nInteractive November 2026 Map Explorer\nUse the layer control in the top-right corner of the map to switch between:\n\nU.S. Senate Margin (100 Counties) — Roy Cooper (D) vs. Michael Whatley (R)\nTicket-Splitting Crossover (100 Counties) — the 38 purple counties that voted both for Democrat Roy Cooper and For the Photo Voter ID Constitutional Amendment\nNC House Results (All 120 Districts) — zoom into Charlotte, Wake, Triad, or District 51 (won by Unaffiliated candidate April Montgomery)\nCounty Vote Volume Bubbles (toggleable overlay) — circles sized by total ballots cast\n\n\n\n\n\n\n\n\nColor Key: Dem / Cooper +20+ Dem / Cooper +5–20 Dem / Cooper 0–5 Rep / Whatley 0–5 Rep / Whatley +5–20 Rep / Whatley +20+ Split-Ticket (Cooper + Voter ID Yes) Unaffiliated Win (HD-51)\n\n\n\n\nPublication Maps (NCFREE Editorial Style)\n\nTicket-Splitting Map (Senate vs. Voter ID)All 120 NC House DistrictsU.S. Senate by County"
   },
   {
     "objectID": "about.html",
     "href": "about.html",
     "title": "About",
     "section": "",
-    "text": "About this site"
+    "text": "This site visualizes precinct- and county-level results from the November 3, 2026 North Carolina General Election, published by the North Carolina State Board of Elections (NCSBE).\n\nData & Methodology\n\nElection Results: Official/unofficial precinct export (results_pct_20261103.zip) from the NCSBE Election Night Reporting System (dl.ncsbe.gov/ENRS/2026_11_03/).\nBoundaries: 2024 cartographic county and North Carolina House of Representatives legislative district boundaries from the U.S. Census Bureau via the tigris and sf R packages, projected to NC State Plane (EPSG:32119) for static cartography and WGS84 (EPSG:4326) for interactive Leaflet maps.\nDesign Inspiration: Static map typography and diverging color scales inspired by NCFREE’s 2026 election-night graphics."
   }
 ]
